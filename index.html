@@ -159,6 +159,7 @@ textarea{resize:vertical;min-height:120px;font-family:inherit;line-height:1.6}
       <p class="fname" id="dg-fname"></p>
     </div>
     <div class="progress-bar" id="dg-prog"><div class="progress-fill" id="dg-prog-fill" style="width:0%"></div></div>
+    <div class="status-msg" id="dg-status"></div>
     <button class="btn btn-primary" id="btn-dg" onclick="transcribeDeepgram()">🎙️ Transcribe bằng Deepgram</button>
   </div>
   <div class="tab-content" id="tab-assemblyai">
@@ -498,28 +499,76 @@ function switchTab(t){TABS1.forEach((id,i)=>{document.querySelectorAll('#tabs-st
 function switchTransTab(t){['auto','manual2'].forEach((id,i)=>{document.querySelectorAll('#tabs-step2 .tab')[i].classList.toggle('active',id===t);document.getElementById('ttab-'+id).classList.toggle('active',id===t);});}
 function handleFile(input,fnameId){const f=input.files[0];document.getElementById(fnameId).textContent=f?`✅ ${f.name} (${(f.size/1024/1024).toFixed(1)}MB)`:''}
 
-const PROXIES=[u=>`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,u=>`https://corsproxy.io/?${encodeURIComponent(u)}`,u=>`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`];
-async function fetchWithProxy(url){for(const mk of PROXIES){try{const res=await fetch(mk(url),{signal:AbortSignal.timeout(8000)});if(!res.ok)continue;const ct=res.headers.get('content-type')||'';if(ct.includes('application/json')){const j=await res.json();return j.contents??JSON.stringify(j);}return await res.text();}catch(_){continue;}}throw new Error('Tất cả proxy thất bại.');}
-function getVideoId(url){const m=url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);return m?m[1]:null;}
+const PROXIES = [
+  // Vercel API route (nhất quán nhất)
+  u => `/api/proxy?url=${encodeURIComponent(u)}`,
+  // Corsproxy.io — reliable
+  u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+  // AllOrigins JSON wrapper
+  u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+  // AllOrigins raw
+  u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  // Codetabs
+  u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+];
 
 async function fetchYTTranscript(){
   const url=document.getElementById('yt-url').value.trim();
   const vid=getVideoId(url);
   if(!vid)return setStatus('yt-status','❌ Link không hợp lệ!','#ff9090');
-  setBtnLoading('btn-yt',true,'Đang tải...');showProg('yt-prog','yt-prog-fill',20);setStatus('yt-status','🔍 Đang tìm phụ đề...','#7cb9ff');
+  setBtnLoading('btn-yt',true,'Đang tải...');
+  showProg('yt-prog','yt-prog-fill',20);
+  setStatus('yt-status','🔍 Đang tìm phụ đề...','#7cb9ff');
   try{
     const html=await fetchWithProxy('https://www.youtube.com/watch?v='+vid);
-    const match=html.match(/"captionTracks":(\[.*?\])/);
-    if(!match){showProg('yt-prog','yt-prog-fill',100);return setStatus('yt-status','⚠️ Video không có phụ đề.','#ffb347');}
-    const tracks=JSON.parse(match[1]);ytCaptions={};
-    tracks.forEach(t=>{ytCaptions[t.name?.simpleText||t.languageCode]=t.baseUrl;});
+    const match=html.match(/\"captionTracks\":(\[.*?\])/);
+    if(!match){
+      showProg('yt-prog','yt-prog-fill',100);
+      return setStatus('yt-status','⚠️ Video không có phụ đề.','#ffb347');
+    }
+    const tracks=JSON.parse(match[1]);
+    ytCaptions={};
+    tracks.forEach(t=>{
+      const key=t.name?.simpleText||t.languageCode;
+      ytCaptions[key]=t.baseUrl;
+    });
     const sel=document.getElementById('yt-lang-dropdown');
     sel.innerHTML=Object.keys(ytCaptions).map(l=>`<option value="${l}">${l}</option>`).join('');
     document.getElementById('yt-lang-select').style.display='block';
-    showProg('yt-prog','yt-prog-fill',100);setStatus('yt-status',`✅ Tìm thấy ${Object.keys(ytCaptions).length} ngôn ngữ.`,'#7bffb0');
-  }catch(e){setStatus('yt-status','❌ '+e.message,'#ff9090');}
-  finally{setBtnLoading('btn-yt',false,'Lấy transcript');}
+    showProg('yt-prog','yt-prog-fill',100);
+    setStatus('yt-status',`✅ Tìm thấy ${Object.keys(ytCaptions).length} ngôn ngữ.`, '#7bffb0');
+  }catch(e){
+    showProg('yt-prog','yt-prog-fill',100);
+    setStatus('yt-status','❌ '+e.message,'#ff9090');
+  }finally{
+    setBtnLoading('btn-yt',false,'Lấy transcript');
+  }
 }
+
+async function fetchWithProxy(url) {
+  for (const mk of PROXIES) {
+    const proxyUrl = mk(url);
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const j = await res.json();
+        // AllOrigins returns {contents: "..."}
+        if (j.contents) return j.contents;
+        return JSON.stringify(j);
+      }
+      // Assume plain text / XML
+      return await res.text();
+    } catch (_) {
+      continue;
+    }
+  }
+  throw new Error('Tất cả proxy thất bại.');
+}
+function getVideoId(url){const m=url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);return m?m[1]:null;}
+
+// Duplicate fetchYTTranscript removed; using proper implementation above.
 
 async function loadSelectedLang(){
   const lang=document.getElementById('yt-lang-dropdown').value;
@@ -539,37 +588,95 @@ async function loadSelectedLang(){
 async function transcribeDeepgram(){
   const key=document.getElementById('deepgram-key').value.trim();
   const file=document.getElementById('dg-file').files[0];
-  if(!key)return alert('Nhập Deepgram API key!');if(!file)return alert('Chọn file audio!');
-  setBtnLoading('btn-dg',true,'Đang transcribe...');showProg('dg-prog','dg-prog-fill',30);
+  if(!key)return alert('Nhập Deepgram API key!');
+  if(!file)return alert('Chọn file audio!');
+  setBtnLoading('btn-dg',true,'Đang transcribe...');
+  showProg('dg-prog','dg-prog-fill',30);
+  setStatus('dg-status','⏳ Đang gửi lên Deepgram...','#7cb9ff');
   try{
-    const res=await fetch('https://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&punctuate=true&utterances=true',{method:'POST',headers:{'Authorization':'Token '+key,'Content-Type':file.type||'audio/mp3'},body:file});
-    if(!res.ok){const e=await res.json();throw new Error(e.err_msg||'Lỗi Deepgram');}
-    showProg('dg-prog','dg-prog-fill',90);
-    const data=await res.json();let segs=[];
-    const words = data?.results?.channels?.[0]?.alternatives?.[0]?.words || [];
-    if (words.length) {
-      // Gom words thành câu dựa trên dấu câu, lấy timestamp từ word đầu tiên của mỗi câu
-      segs = [];
-      let curWords = [];
-      words.forEach((w, i) => {
-        curWords.push(w);
-        const txt = w.punctuated_word || w.word;
-        const isEnd = /[.?!,]$/.test(txt) || i === words.length - 1;
-        // Tạo câu mới khi gặp dấu câu kết thúc hoặc đủ ~15 từ
-        if (isEnd && (curWords.length >= 8 || /[.?!]$/.test(txt) || i === words.length - 1)) {
-          const text = curWords.map(w2 => w2.punctuated_word || w2.word).join(' ').trim();
-          if (text) segs.push({ start: curWords[0].start, text });
-          curWords = [];
-        }
-      });
-    } else if (data?.results?.utterances?.length) {
-      segs = data.results.utterances.map(u => ({ start: u.start, text: u.transcript }));
+    // Xác định MIME type chính xác từ tên file
+    const ext=(file.name.split('.').pop()||'').toLowerCase();
+    const mimeMap={mp3:'audio/mpeg',mp4:'audio/mp4',wav:'audio/wav',m4a:'audio/mp4',ogg:'audio/ogg',webm:'audio/webm',flac:'audio/flac',aac:'audio/aac',opus:'audio/ogg'};
+    const contentType=mimeMap[ext]||file.type||'audio/mpeg';
+
+    // nova-2 + utterances + paragraphs + words — lấy đủ data 1 lần
+    const dgParams='model=nova-2&detect_language=true&smart_format=true&punctuate=true&utterances=true&paragraphs=true&diarize=false';
+    setStatus('dg-status','📤 Đang gửi lên Deepgram...','#7cb9ff');
+    const res=await fetch('https://api.deepgram.com/v1/listen?'+dgParams,{
+      method:'POST',
+      headers:{'Authorization':'Token '+key,'Content-Type':contentType},
+      body:file
+    });
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      throw new Error(err.err_msg||err.message||`HTTP ${res.status}`);
     }
-    else{const words=data?.results?.channels?.[0]?.alternatives?.[0]?.words||[];for(let i=0;i<words.length;i+=10){const chunk=words.slice(i,i+10);segs.push({start:chunk[0].start,text:chunk.map(w=>w.word).join(' ')});}}
-    if(!segs.length)throw new Error('Không nhận được transcript');
-    showProg('dg-prog','dg-prog-fill',100);setSegments(segs);
-  }catch(e){alert('Lỗi: '+e.message);}
-  finally{setBtnLoading('btn-dg',false,'🎙️ Transcribe bằng Deepgram');}
+    showProg('dg-prog','dg-prog-fill',80);
+    setStatus('dg-status','🧠 Đang xử lý...','#7cb9ff');
+    const data=await res.json();
+    console.log('Deepgram raw response:', JSON.stringify(data,null,2));
+    let segs=[];
+
+    // 1. Ưu tiên utterances (diarized segments)
+    if(data?.results?.utterances?.length){
+      segs=data.results.utterances.map(u=>({start:u.start,text:u.transcript.trim()})).filter(s=>s.text);
+    }
+
+    // 2. Dùng paragraphs nếu có
+    if(!segs.length){
+      const paras=data?.results?.channels?.[0]?.alternatives?.[0]?.paragraphs?.paragraphs||[];
+      if(paras.length){
+        paras.forEach(p=>{
+          (p.sentences||[]).forEach(s=>{
+            if(s.text?.trim())segs.push({start:s.start,text:s.text.trim()});
+          });
+        });
+      }
+    }
+
+    // 3. Tách words theo dấu câu
+    if(!segs.length){
+      const words=data?.results?.channels?.[0]?.alternatives?.[0]?.words||[];
+      if(words.length){
+        let cur=[];
+        words.forEach((w,i)=>{
+          cur.push(w);
+          const txt=w.punctuated_word||w.word||'';
+          const isPunct=/[.?!]$/.test(txt);
+          const isLast=i===words.length-1;
+          if((isPunct&&cur.length>=4)||cur.length>=15||isLast){
+            const text=cur.map(x=>x.punctuated_word||x.word).join(' ').trim();
+            if(text)segs.push({start:cur[0].start,text});
+            cur=[];
+          }
+        });
+      }
+    }
+
+    // 4. Fallback: split transcript thô theo câu
+    if(!segs.length){
+      const raw=data?.results?.channels?.[0]?.alternatives?.[0]?.transcript||'';
+      if(raw.trim()){
+        const sentences=raw.match(/[^.?!]+[.?!]*/g)||[raw];
+        sentences.filter(s=>s.trim()).forEach((text,i)=>{
+          segs.push({start:i*4,text:text.trim()});
+        });
+      }
+    }
+
+    if(!segs.length){
+      setStatus('dg-status','❌ Deepgram không nhận ra giọng nói. Kiểm tra: file có audio không? Đúng ngôn ngữ không?','#ff9090');
+      throw new Error('Không nhận được transcript từ Deepgram');
+    }
+    showProg('dg-prog','dg-prog-fill',100);
+    setStatus('dg-status',`✅ Đã transcribe ${segs.length} đoạn!`,'#7bffb0');
+    setSegments(segs);
+  }catch(e){
+    setStatus('dg-status','❌ '+e.message,'#ff9090');
+    alert('Lỗi Deepgram: '+e.message);
+  }finally{
+    setBtnLoading('btn-dg',false,'🎙️ Transcribe bằng Deepgram');
+  }
 }
 
 async function transcribeAssemblyAI(){
